@@ -1,6 +1,7 @@
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import ValidationError
 from sqlalchemy import asc, desc, select
 from sqlalchemy.orm import Session
 
@@ -15,13 +16,15 @@ router = APIRouter(prefix="/notes", tags=["notes"])
 def list_notes(
     db: Session = Depends(get_db),
     q: Optional[str] = None,
-    skip: int = 0,
-    limit: int = Query(50, le=200),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, le=200, ge=1),
     sort: str = Query("-created_at", description="Sort by field, prefix with - for desc"),
 ) -> list[NoteRead]:
     stmt = select(Note)
     if q:
-        stmt = stmt.where((Note.title.contains(q)) | (Note.content.contains(q)))
+        q = q.strip()
+        if q:
+            stmt = stmt.where((Note.title.contains(q)) | (Note.content.contains(q)))
 
     sort_field = sort.lstrip("-")
     order_fn = desc if sort.startswith("-") else asc
@@ -34,7 +37,7 @@ def list_notes(
     return [NoteRead.model_validate(row) for row in rows]
 
 
-@router.post("/", response_model=NoteRead, status_code=201)
+@router.post("/", response_model=NoteRead, status_code=status.HTTP_201_CREATED)
 def create_note(payload: NoteCreate, db: Session = Depends(get_db)) -> NoteRead:
     note = Note(title=payload.title, content=payload.content)
     db.add(note)
@@ -47,7 +50,7 @@ def create_note(payload: NoteCreate, db: Session = Depends(get_db)) -> NoteRead:
 def patch_note(note_id: int, payload: NotePatch, db: Session = Depends(get_db)) -> NoteRead:
     note = db.get(Note, note_id)
     if not note:
-        raise HTTPException(status_code=404, detail="Note not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Note not found")
     if payload.title is not None:
         note.title = payload.title
     if payload.content is not None:
@@ -62,7 +65,33 @@ def patch_note(note_id: int, payload: NotePatch, db: Session = Depends(get_db)) 
 def get_note(note_id: int, db: Session = Depends(get_db)) -> NoteRead:
     note = db.get(Note, note_id)
     if not note:
-        raise HTTPException(status_code=404, detail="Note not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Note not found")
     return NoteRead.model_validate(note)
+
+
+@router.delete("/{note_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_note(note_id: int, db: Session = Depends(get_db)) -> None:
+    note = db.get(Note, note_id)
+    if not note:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Note not found")
+    db.delete(note)
+    db.flush()
+
+
+@router.delete("/", status_code=status.HTTP_204_NO_CONTENT)
+def delete_all_notes(db: Session = Depends(get_db)) -> None:
+    """Delete all notes. Use with caution!"""
+    db.execute(select(Note))
+    notes = db.scalars(select(Note)).all()
+    for note in notes:
+        db.delete(note)
+    db.flush()
+
+
+@router.get("/count")
+def count_notes(db: Session = Depends(get_db)) -> dict:
+    """Get total count of notes"""
+    total = db.execute(select(Note)).scalars().all()
+    return {"count": len(total)}
 
 
