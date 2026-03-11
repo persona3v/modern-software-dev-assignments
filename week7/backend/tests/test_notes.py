@@ -129,8 +129,8 @@ def test_pagination_limit_max(client):
 def test_pagination_limit_min(client):
     """Test that limit has minimum of 1"""
     r = client.get("/notes/", params={"limit": 0})
-    # Should either work with 0 or reject
-    assert r.status_code in [200, 422]
+    # limit=0 should be rejected as invalid input
+    assert r.status_code == 422
 
 
 # ==================== Sorting Tests ====================
